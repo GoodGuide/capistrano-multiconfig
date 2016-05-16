@@ -12,9 +12,23 @@ Capistrano::Configuration.instance(true).load do
   end
 
   # build configuration names list
-  config_names = config_files.map do |config_file|
-    config_file.sub("#{config_root}/", '').sub(/\.rb$/, '').gsub('/', ':')
+  alias_names = []
+  config_names = []
+
+  config_files.each do |config_file|
+    task_name = config_file.sub("#{config_root}/", '').sub(/\.rb$/, '').gsub('/', ':')
+
+    if File.symlink?(config_file)
+      target = File.realpath(config_file)
+      # p symlink: true, config_file: config_file, target: target
+      next unless File.dirname(target) == File.dirname(config_file)
+      target_task = target.sub("#{config_root}/", '').sub(/\.rb$/, '').gsub('/', ':')
+      alias_names << [task_name, target_task]
+    else
+      config_names << task_name
+    end
   end
+  # p alias_names
 
   # ensure that configuration segments don't override any method, task or namespace
   config_names.each do |config_name|
@@ -26,65 +40,56 @@ Capistrano::Configuration.instance(true).load do
     end
   end
 
-  # create configuration task for each configuration name
-  config_names.each do |config_name|
-    segments = config_name.split(':')
-    namespace_names = segments[0, segments.size - 1]
-    task_name = segments.last
+  def create_task_in_namespaces(full_task_name, description="Load #{full_task_name} configuration",  &task_body)
+    *namespace_names, task_name = full_task_name.split(':')
 
     # create configuration task block.
     # NOTE: Capistrano 'namespace' DSL invokes instance_eval that
     # that pass evaluable object as argument to block.
     block = lambda do |parent|
-      desc "Load #{config_name} configuration"
-      task(task_name) do
-        # set configuration name as :config_name variable
-        top.set(:config_name, config_name)
-
-        # recursively load configurations
-        segments.size.times do |i|
-          path = ([config_root] + segments[0..i]).join('/') + '.rb'
-          top.load(:file => path) if File.exists?(path)
-        end
-      end
+      p desc: description
+      desc description
+      p task: task_name
+      parent.task(task_name, &task_body)
     end
 
     # wrap task block into namespace blocks
-    #
-    # namespace_names = [nsN, ..., ns2, ns1]
-    #
-    # block = block0 = lambda do |parent|
-    #   desc "DESC"
-    #   task(:task_name) { TASK }
-    # end
-    # block = block1 = lambda { |parent| parent.namespace(:ns1, &block0) }
-    # block = block2 = lambda { |parent| parent.namespace(:ns2, &block1) }
-    # ...
-    # block = blockN = lambda { |parent| parent.namespace(:nsN, &blockN-1) }
-    #
     block = namespace_names.reverse.inject(block) do |child, name|
       lambda do |parent|
+        p namespace: name
         parent.namespace(name, &child)
       end
     end
 
     # create namespaced configuration task
-    #
-    # block = lambda do
-    #   namespace :nsN do
-    #     ...
-    #     namespace :ns2 do
-    #       namespace :ns1 do
-    #         desc "DESC"
-    #         task(:task_name) { TASK }
-    #       end
-    #     end
-    #     ...
-    #   end
-    # end
     block.call(top)
   end
 
+  alias_names.each do |(alias_name, target_task)|
+    create_task_in_namespaces(alias_name, "Load #{target_task} configuration") do
+      warn "#{alias_name} is an alias. Loading task #{target_task}"
+    end
+
+    after alias_name, target_task
+  end
+
+  # create configuration task for each configuration name
+  config_names.each do |config_name|
+    all_tasks_to_run = config_name.split(':').inject([]){ |a,e| a + [[a.last, e].compact.join(':')] }
+
+    create_task_in_namespaces(config_name) do
+      # set configuration name as :config_name variable
+      top.set(:config_name, config_name)
+
+      # recursively load configurations
+      all_tasks_to_run.each do |task_name|
+        path = [config_root, *task_name.split(':')].join('/') + '.rb'
+        p config_name: config_name, load_path: path
+        top.load(:file => path) if File.exists?(path)
+      end
+    end
+  end
+
   # set configuration names list
-  set(:config_names, config_names)
+  set(:config_names, config_names + alias_names.map(&:first))
 end
