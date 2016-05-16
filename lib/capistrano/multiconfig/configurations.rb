@@ -20,7 +20,6 @@ Capistrano::Configuration.instance(true).load do
 
     if File.symlink?(config_file)
       target = File.realpath(config_file)
-      # p symlink: true, config_file: config_file, target: target
       next unless File.dirname(target) == File.dirname(config_file)
       target_task = target.sub("#{config_root}/", '').sub(/\.rb$/, '').gsub('/', ':')
       alias_names << [task_name, target_task]
@@ -28,7 +27,6 @@ Capistrano::Configuration.instance(true).load do
       config_names << task_name
     end
   end
-  # p alias_names
 
   # ensure that configuration segments don't override any method, task or namespace
   config_names.each do |config_name|
@@ -47,16 +45,13 @@ Capistrano::Configuration.instance(true).load do
     # NOTE: Capistrano 'namespace' DSL invokes instance_eval that
     # that pass evaluable object as argument to block.
     block = lambda do |parent|
-      p desc: description
       desc description
-      p task: task_name
       parent.task(task_name, &task_body)
     end
 
     # wrap task block into namespace blocks
     block = namespace_names.reverse.inject(block) do |child, name|
       lambda do |parent|
-        p namespace: name
         parent.namespace(name, &child)
       end
     end
@@ -84,7 +79,6 @@ Capistrano::Configuration.instance(true).load do
       # recursively load configurations
       all_tasks_to_run.each do |task_name|
         path = [config_root, *task_name.split(':')].join('/') + '.rb'
-        p config_name: config_name, load_path: path
         top.load(:file => path) if File.exists?(path)
       end
     end
